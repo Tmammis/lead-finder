@@ -1,5 +1,6 @@
 import { searchCompanies, fetchOwner } from "./client";
 import type { AllabolagCompany, AllabolagMatch } from "./types";
+import { nameContainsPlace } from "./swedish-places";
 
 export type AllabolagRanges = {
   employeesMin: number;
@@ -49,6 +50,13 @@ export function buildSearchTerms(name: string): string[] {
     const words = seg.trim().split(/\s+/).filter(Boolean);
     while (words.length > 1 && SERVICE_PREFIXES.has(words[0].toLowerCase())) {
       words.shift();
+    }
+    // Skip single-word segments that are a bare service prefix or a bare place
+    // name — they produce noise searches that crowd out the real company name.
+    // Multi-word segments are always kept even if they contain a place.
+    if (words.length === 1) {
+      const w = words[0].toLowerCase();
+      if (SERVICE_PREFIXES.has(w) || nameContainsPlace(words[0])) continue;
     }
     if (words.length) push(words.join(" "));
   }
