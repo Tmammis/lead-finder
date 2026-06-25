@@ -1,6 +1,6 @@
 import { getDb } from "../db";
 import { leads, campaigns, type AllabolagConfig, type Lead } from "../db/schema";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, ne } from "drizzle-orm";
 import { matchLead, evaluate } from "./enricher";
 import { nameContainsPlace } from "./swedish-places";
 import type { AllabolagMatch } from "./types";
@@ -150,7 +150,7 @@ export async function runCampaignAllabolag(
 
   const rows = leadIds && leadIds.length > 0
     ? db.select().from(leads).where(and(eq(leads.campaignId, campaignId), inArray(leads.id, leadIds))).all()
-    : db.select().from(leads).where(eq(leads.campaignId, campaignId)).all();
+    : db.select().from(leads).where(and(eq(leads.campaignId, campaignId), ne(leads.status, "archived"))).all();
 
   for (const lead of rows) {
     if (isCampaignStopped(campaignId)) break;
@@ -169,11 +169,9 @@ export async function runCampaignAllabolag(
       if (status === "matched") summary.nowMatched++;
       else summary.stillNeedsReview++;
     }
-    leadEmitter.emit("lead:status-changed", {
-      leadId: lead.id,
-      campaignId,
-      status: outcome === "dropped" ? "archived" : "new",
-    });
+    if (outcome !== "dropped") {
+      leadEmitter.emit("lead:status-changed", { leadId: lead.id, campaignId, status: "new" });
+    }
   }
   return summary;
 }
