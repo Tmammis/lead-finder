@@ -13,8 +13,11 @@ import { Switch } from "@/components/ui/switch";
 import { type ActorDefinition } from "@/lib/apify/registry";
 import { useActors } from "@/hooks/use-actors";
 import { toast } from "sonner";
-import { Sparkles, Loader2, ArrowLeft, CheckCircle2, Pencil, Search, Zap, BarChart3, Plus, X, ToggleLeft, Type, Database, Hash, Link2, ToggleRight } from "lucide-react";
-import type { KpiDefinition, LeadFieldDefinition } from "@/lib/db/schema";
+import { Sparkles, Loader2, ArrowLeft, CheckCircle2, Pencil, Search, Zap, BarChart3, Plus, X, ToggleLeft, Type, Database, Hash, Link2, ToggleRight, Globe } from "lucide-react";
+import type { KpiDefinition, LeadFieldDefinition, BokadirektSource, AllabolagConfig } from "@/lib/db/schema";
+import { AllabolagSettings } from "@/components/campaigns/allabolag-settings";
+import { BOKADIREKT_CITIES } from "@/lib/bokadirekt/cities";
+import { BOKADIREKT_CATEGORIES } from "@/lib/bokadirekt/categories";
 
 interface CampaignPlan {
   targetNiche: string;
@@ -43,9 +46,12 @@ export default function NewCampaignPage() {
 
   const [selectedActors, setSelectedActors] = useState<Set<string>>(new Set());
   const [editableActorConfigs, setEditableActorConfigs] = useState<Record<string, Record<string, string>>>({});
+  const [bokadirektSources, setBokadirektSources] = useState<BokadirektSource[]>([]);
+  const [discoverySource, setDiscoverySource] = useState<"apify" | "bokadirekt">("apify");
   const [leadFields, setLeadFields] = useState<LeadFieldDefinition[]>([]);
   const [suggestingFields, setSuggestingFields] = useState(false);
   const [kpis, setKpis] = useState<KpiDefinition[]>([]);
+  const [allabolagConfig, setAllabolagConfig] = useState<AllabolagConfig | null>(null);
 
   useEffect(() => {
     fetch("/api/settings")
@@ -163,14 +169,74 @@ export default function NewCampaignPage() {
     return configs;
   };
 
-  const handleGoToStep3 = async () => {
-    const selectedFindActors = [...selectedActors].filter((id) => {
-      const a = getActorById(id);
-      return a && a.phase === "find";
-    });
-    if (selectedFindActors.length === 0) {
-      toast.error("Select at least one actor to find leads");
+  const addBokadirektSource = () => {
+    setBokadirektSources((prev) => [
+      ...prev,
+      { id: `bd_${Date.now()}`, city: "malmo", category: undefined, maxPages: 3 },
+    ]);
+  };
+
+  const removeBokadirektSource = (id: string) => {
+    setBokadirektSources((prev) => prev.filter((s) => s.id !== id));
+  };
+
+  const updateBokadirektSource = (id: string, updates: Partial<BokadirektSource>) => {
+    setBokadirektSources((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, ...updates } : s)),
+    );
+  };
+
+  const bokadirektPreviewUrl = (source: BokadirektSource): string => {
+    const path = source.category ? `/${source.category}/${source.city}` : `/vad/${source.city}`;
+    return `https://www.bokadirekt.se${path}`;
+  };
+
+  const handleSourceChange = (next: "apify" | "bokadirekt") => {
+    if (next === discoverySource) return;
+    setDiscoverySource(next);
+
+    if (next === "apify") {
+      setBokadirektSources([]);
       return;
+    }
+
+    const droppedFindActorIds: string[] = [];
+    setSelectedActors((prev) => {
+      const kept = new Set<string>();
+      for (const id of prev) {
+        const a = getActorById(id);
+        if (a?.phase === "enrich") {
+          kept.add(id);
+        } else {
+          droppedFindActorIds.push(id);
+        }
+      }
+      return kept;
+    });
+    if (droppedFindActorIds.length > 0) {
+      setEditableActorConfigs((prev) => {
+        const next = { ...prev };
+        for (const id of droppedFindActorIds) delete next[id];
+        return next;
+      });
+    }
+  };
+
+  const handleGoToStep3 = async () => {
+    if (discoverySource === "apify") {
+      const selectedFindActors = [...selectedActors].filter((id) => {
+        const a = getActorById(id);
+        return a && a.phase === "find";
+      });
+      if (selectedFindActors.length === 0) {
+        toast.error("Select at least one Apify actor to find leads");
+        return;
+      }
+    } else {
+      if (bokadirektSources.length === 0) {
+        toast.error("Add at least one Bokadirekt source");
+        return;
+      }
     }
     setStep(3);
 
@@ -226,8 +292,10 @@ export default function NewCampaignPage() {
           aiProvider,
           apifyActors: allSelectedActors,
           actorConfigs,
+          bokadirektSources: discoverySource === "bokadirekt" ? bokadirektSources : [],
           kpiDefinitions: kpis,
           leadFieldDefinitions: leadFields,
+          allabolagConfig,
           scheduleFrequency: editableSchedule,
           autoEnrich: editableAutoEnrich,
           status: "active",
@@ -511,7 +579,142 @@ export default function NewCampaignPage() {
             </CardContent>
           </Card>
 
+          {/* Discovery source picker — Apify actors OR Bokadirekt scrape */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Where do you want to find leads?</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Pick one discovery source. Enrichment actors below run on top of either source.
+              </p>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => handleSourceChange("apify")}
+                  className={`rounded-lg border-2 p-4 text-left transition-colors ${discoverySource === "apify" ? "border-primary bg-primary/5" : "border-border hover:border-muted-foreground/30"}`}
+                >
+                  <div className="flex items-center gap-2">
+                    <Search className="h-4 w-4 text-primary" />
+                    <p className="text-sm font-medium">Apify actors</p>
+                  </div>
+                  <p className="mt-1.5 text-xs text-muted-foreground">
+                    Run Apify find-phase actors (Google Maps, etc). Worldwide. Uses your Apify credit.
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSourceChange("bokadirekt")}
+                  className={`rounded-lg border-2 p-4 text-left transition-colors ${discoverySource === "bokadirekt" ? "border-primary bg-primary/5" : "border-border hover:border-muted-foreground/30"}`}
+                >
+                  <div className="flex items-center gap-2">
+                    <Globe className="h-4 w-4 text-primary" />
+                    <p className="text-sm font-medium">Bokadirekt scrape (Sweden)</p>
+                  </div>
+                  <p className="mt-1.5 text-xs text-muted-foreground">
+                    Direct scrape of bokadirekt.se by city and category. Sweden only. No API cost.
+                  </p>
+                </button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Bokadirekt (Sweden) direct scrape — no API cost */}
+          {discoverySource === "bokadirekt" && (
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Globe className="h-4 w-4 text-primary" />
+                  <CardTitle className="text-base">Bokadirekt (Sverige) — direct scrape, no API cost</CardTitle>
+                </div>
+                <Button variant="outline" size="sm" onClick={addBokadirektSource} className="gap-1.5">
+                  <Plus className="h-3.5 w-3.5" /> Add Source
+                </Button>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Scrape Swedish service businesses directly from bokadirekt.se — no Apify token required.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {bokadirektSources.length === 0 ? (
+                <div className="text-center py-6 text-sm text-muted-foreground">
+                  No sources configured. Click &quot;Add Source&quot; to scrape a Swedish city.
+                </div>
+              ) : (
+                bokadirektSources.map((source) => (
+                  <div key={source.id} className="rounded-lg border p-4 space-y-3">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">City</Label>
+                        <Select
+                          value={source.city}
+                          onValueChange={(v) => updateBokadirektSource(source.id, { city: v })}
+                        >
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {BOKADIREKT_CITIES.map((c) => (
+                              <SelectItem key={c.slug} value={c.slug}>{c.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Category (optional)</Label>
+                        <Select
+                          value={source.category ?? "__all__"}
+                          onValueChange={(v) =>
+                            updateBokadirektSource(source.id, {
+                              category: v === "__all__" ? undefined : v,
+                            })
+                          }
+                        >
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__all__">All categories</SelectItem>
+                            {BOKADIREKT_CATEGORIES.map((c) => (
+                              <SelectItem key={c.slug} value={c.slug}>{c.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Max pages (~30/page)</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={50}
+                          value={source.maxPages}
+                          onChange={(e) =>
+                            updateBokadirektSource(source.id, {
+                              maxPages: Math.max(1, Math.min(50, Number(e.target.value) || 1)),
+                            })
+                          }
+                        />
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs text-muted-foreground truncate">
+                        <span className="font-medium">URL:</span> {bokadirektPreviewUrl(source)}
+                      </p>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeBokadirektSource(source.id)}
+                        className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive shrink-0"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+          )}
+
           {/* Find Leads - Discovery Actors */}
+          {discoverySource === "apify" && (
           <Card>
             <CardHeader className="pb-3">
               <div className="flex items-center gap-2">
@@ -526,6 +729,7 @@ export default function NewCampaignPage() {
               {findActors.map((actor) => renderActorCard(actor, selectedActors.has(actor.id)))}
             </CardContent>
           </Card>
+          )}
 
           {/* Enrich Leads - Enrichment Actors */}
           <Card>
@@ -568,12 +772,19 @@ export default function NewCampaignPage() {
             </CardContent>
           </Card>
 
+          {/* allabolag.se enrichment + employee/revenue filter (Sweden) */}
+          <AllabolagSettings value={allabolagConfig} onChange={setAllabolagConfig} />
+
           {/* Next button */}
           <Button
             className="w-full"
             size="lg"
             onClick={handleGoToStep3}
-            disabled={selectedActors.size === 0}
+            disabled={
+              discoverySource === "apify"
+                ? [...selectedActors].every((id) => getActorById(id)?.phase !== "find")
+                : bokadirektSources.length === 0
+            }
           >
             Next: Configure Lead Fields
           </Button>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { formatKr } from "@/lib/utils";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Plus, Target, Trash2, Loader2, DollarSign } from "lucide-react";
+import { Plus, Target, Trash2, Loader2 } from "lucide-react";
 
 interface CampaignRow {
   id: number;
@@ -147,11 +148,10 @@ export default function CampaignsPage() {
                     {c.totalCost > 0 && (
                       <div className="flex flex-col items-end gap-0.5">
                         <span className="flex items-center gap-0.5 font-medium text-foreground">
-                          <DollarSign className="h-3 w-3" />
-                          {c.totalCost.toFixed(4)}
+                          {formatKr(c.totalCost, 4)}
                         </span>
                         {c.avgCostPerLead > 0 && (
-                          <span className="text-muted-foreground">${c.avgCostPerLead.toFixed(4)}/lead</span>
+                          <span className="text-muted-foreground">{formatKr(c.avgCostPerLead, 4)}/lead</span>
                         )}
                       </div>
                     )}

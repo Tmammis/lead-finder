@@ -98,6 +98,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     db.delete(leadPersonalization).where(inArray(leadPersonalization.leadId, campaignLeadIds)).run();
   }
   db.delete(analyticsEvents).where(eq(analyticsEvents.campaignId, campaignId)).run();
+  db.delete(llmCosts).where(eq(llmCosts.campaignId, campaignId)).run();
   db.delete(apifyRuns).where(eq(apifyRuns.campaignId, campaignId)).run();
   db.delete(leads).where(eq(leads.campaignId, campaignId)).run();
   db.delete(campaigns).where(eq(campaigns.id, campaignId)).run();

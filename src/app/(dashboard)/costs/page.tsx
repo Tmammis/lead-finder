@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { formatKr, USD_TO_SEK } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -75,9 +76,9 @@ const OPERATION_LABELS: Record<string, string> = {
 };
 
 function formatCost(n: number): string {
-  if (n === 0) return "$0.00";
-  if (n < 0.01) return `$${n.toFixed(4)}`;
-  return `$${n.toFixed(2)}`;
+  if (n === 0) return formatKr(0, 2);
+  if (n < 0.01) return formatKr(n, 4);
+  return formatKr(n, 2);
 }
 
 function formatTokens(n: number): string {
@@ -229,7 +230,7 @@ export default function CostsPage() {
                 <BarChart data={campaignsWithCost}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="campaignName" fontSize={12} />
-                  <YAxis fontSize={12} tickFormatter={(v) => `$${v}`} />
+                  <YAxis fontSize={12} tickFormatter={(v) => `Kr ${v * USD_TO_SEK}`} />
                   <Tooltip formatter={(value: number) => formatCost(value)} />
                   <Bar dataKey="apifyCost" name="Apify" fill="#3b82f6" stackId="cost" radius={[0, 0, 0, 0]} />
                   <Bar dataKey="llmCost" name="LLM" fill="#22c55e" stackId="cost" radius={[4, 4, 0, 0]} />

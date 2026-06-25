@@ -2,6 +2,13 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+/* Hard-exclude build-cache dirs from Tailwind's class scanner.
+   .gitignore already covers these, but this is belt-and-suspenders:
+   if a stray cache dir ever lands at the project root, Tailwind won't
+   try to extract class candidates from its binary .sst files. */
+@source not "../../var/**/*";
+@source not "../../.next/**/*";
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

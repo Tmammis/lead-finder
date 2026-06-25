@@ -67,6 +67,8 @@ export async function POST(req: NextRequest) {
     actorConfigs: body.actorConfigs || {},
     kpiDefinitions: body.kpiDefinitions || [],
     leadFieldDefinitions: body.leadFieldDefinitions || [],
+    bokadirektSources: body.bokadirektSources || [],
+    allabolagConfig: body.allabolagConfig ?? null,
     scheduleFrequency: body.scheduleFrequency || "once",
     aiProvider: body.aiProvider || "openai",
     autoEnrich: body.autoEnrich ?? true,

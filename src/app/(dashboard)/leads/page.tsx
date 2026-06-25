@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { formatKr } from "@/lib/utils";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
@@ -33,6 +34,29 @@ import { Users, Sparkles, Loader2, X, Download, Target } from "lucide-react";
 import { ScoreBadgeCompact } from "@/components/score-badge";
 import { getLeadDisplayName } from "@/lib/utils/lead-display";
 
+const STAGE_OPTIONS = [
+  { value: "no_answer", label: "No answer" },
+  { value: "info_sent_sms", label: "Info sent (SMS)" },
+  { value: "info_sent_email", label: "Info sent (email)" },
+  { value: "interested", label: "Interested" },
+  { value: "not_interested", label: "Not interested" },
+  { value: "meeting_booked", label: "Meeting booked" },
+] as const;
+
+const stageColors: Record<string, string> = {
+  no_answer: "bg-yellow-100 text-yellow-800",
+  info_sent_sms: "bg-blue-100 text-blue-800",
+  info_sent_email: "bg-blue-100 text-blue-800",
+  interested: "bg-green-100 text-green-800",
+  not_interested: "bg-red-100 text-red-800",
+  meeting_booked: "bg-emerald-100 text-emerald-800",
+};
+
+function stageLabel(value: string | null | undefined): string {
+  if (!value) return "—";
+  return STAGE_OPTIONS.find((s) => s.value === value)?.label || value;
+}
+
 interface LeadFieldDefinition {
   id: string;
   label: string;
@@ -54,6 +78,8 @@ interface Lead {
   website: string | null;
   score: number;
   status: string;
+  stage: string | null;
+  notes: string | null;
   source: string;
   campaignId: number | null;
   rawData?: Record<string, unknown>;
@@ -164,6 +190,8 @@ function generateCsv(
   const headers = [
     "ID",
     "Display Name",
+    "Stage",
+    "Notes",
     ...dynFields.map((f) => f.label),
     "Score",
     "Status",
@@ -187,6 +215,8 @@ function generateCsv(
     const values = [
       String(lead.id),
       displayName,
+      stageLabel(lead.stage),
+      lead.notes || "",
       ...dynFields.map((f) => formatFieldValue(resolveFieldValue(lead, f.id), f.type)),
       String(lead.score ?? 0),
       lead.status,
@@ -213,10 +243,12 @@ export default function LeadsPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [total, setTotal] = useState(0);
   const [statusFilter, setStatusFilter] = useState("all");
+  const [stageFilter, setStageFilter] = useState("all");
   const [aiQuery, setAiQuery] = useState("");
   const [aiFilters, setAiFilters] = useState<LeadFilter[]>([]);
   const [aiLoading, setAiLoading] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [notesDraft, setNotesDraft] = useState<Record<number, string>>({});
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -319,6 +351,49 @@ export default function LeadsPage() {
     loadLeads();
   };
 
+  const updateLeadStage = async (id: number, newStage: string | null) => {
+    setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, stage: newStage } : l)));
+    try {
+      await fetch(`/api/leads/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stage: newStage ?? "" }),
+      });
+    } catch {
+      toast.error("Failed to update stage");
+      loadLeads();
+    }
+  };
+
+  const saveLeadNotes = async (id: number, originalValue: string | null) => {
+    const draft = notesDraft[id];
+    if (draft === undefined) return;
+    if ((draft || "") === (originalValue || "")) {
+      setNotesDraft((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      return;
+    }
+    setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, notes: draft || null } : l)));
+    setNotesDraft((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    try {
+      await fetch(`/api/leads/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes: draft }),
+      });
+    } catch {
+      toast.error("Failed to save notes");
+      loadLeads();
+    }
+  };
+
   const handleExportCsv = () => {
     const dynFields = selectedCampaign?.leadFieldDefinitions || [];
     const csv = generateCsv(filtered, dynFields);
@@ -332,7 +407,12 @@ export default function LeadsPage() {
     toast.success(`Exported ${filtered.length} leads to CSV`);
   };
 
-  const filtered = applyFilters(leads, aiFilters);
+  const filteredByAi = applyFilters(leads, aiFilters);
+  const filtered = stageFilter === "all"
+    ? filteredByAi
+    : stageFilter === "none"
+      ? filteredByAi.filter((l) => !l.stage)
+      : filteredByAi.filter((l) => l.stage === stageFilter);
   const dynFields = selectedCampaign?.leadFieldDefinitions || [];
 
   return (
@@ -385,6 +465,23 @@ export default function LeadsPage() {
               {STATUS_OPTIONS.map((s) => (
                 <SelectItem key={s} value={s}>
                   {s.charAt(0).toUpperCase() + s.slice(1)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+
+        {selectedCampaign && (
+          <Select value={stageFilter} onValueChange={setStageFilter}>
+            <SelectTrigger className="w-44">
+              <SelectValue placeholder="Filter by stage" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Stages</SelectItem>
+              <SelectItem value="none">No stage set</SelectItem>
+              {STAGE_OPTIONS.map((s) => (
+                <SelectItem key={s.value} value={s.value}>
+                  {s.label}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -482,6 +579,8 @@ export default function LeadsPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="min-w-[180px]">Name</TableHead>
+                    <TableHead className="min-w-[140px]">Stage</TableHead>
+                    <TableHead className="min-w-[200px]">Notes</TableHead>
                     {dynFields.map((f) => (
                       <TableHead key={f.id} className="min-w-[120px]">
                         {f.label}
@@ -510,6 +609,62 @@ export default function LeadsPage() {
                             {displayName}
                           </Link>
                         </TableCell>
+                        <TableCell>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button className="focus:outline-none">
+                                <Badge
+                                  className={`${lead.stage ? stageColors[lead.stage] || "" : "bg-gray-100 text-gray-600"} cursor-pointer hover:opacity-80 transition-opacity whitespace-nowrap`}
+                                >
+                                  {stageLabel(lead.stage)}
+                                </Badge>
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="start">
+                              <DropdownMenuItem
+                                onClick={() => updateLeadStage(lead.id, null)}
+                                disabled={!lead.stage}
+                              >
+                                <Badge className="bg-gray-100 text-gray-600 mr-2">—</Badge>
+                                Clear
+                              </DropdownMenuItem>
+                              {STAGE_OPTIONS.map((s) => (
+                                <DropdownMenuItem
+                                  key={s.value}
+                                  onClick={() => updateLeadStage(lead.id, s.value)}
+                                  disabled={s.value === lead.stage}
+                                >
+                                  <Badge className={`${stageColors[s.value] || ""} mr-2`}>
+                                    {s.label}
+                                  </Badge>
+                                </DropdownMenuItem>
+                              ))}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </TableCell>
+                        <TableCell>
+                          <Input
+                            value={notesDraft[lead.id] ?? lead.notes ?? ""}
+                            onChange={(e) =>
+                              setNotesDraft((prev) => ({ ...prev, [lead.id]: e.target.value }))
+                            }
+                            onBlur={() => saveLeadNotes(lead.id, lead.notes)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.currentTarget.blur();
+                              } else if (e.key === "Escape") {
+                                setNotesDraft((prev) => {
+                                  const next = { ...prev };
+                                  delete next[lead.id];
+                                  return next;
+                                });
+                                e.currentTarget.blur();
+                              }
+                            }}
+                            placeholder="Add notes..."
+                            className="h-8 text-sm border-transparent hover:border-input focus:border-input bg-transparent"
+                          />
+                        </TableCell>
                         {dynFields.map((f) => {
                           const val = formatFieldValue(resolveFieldValue(lead, f.id), f.type);
                           if ((f.type === "url" || val.startsWith("http")) && val !== "—") {
@@ -537,7 +692,7 @@ export default function LeadsPage() {
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground tabular-nums">
                           {((lead.llmCostUsd ?? 0) + (lead.apifyCostUsd ?? 0)) > 0
-                            ? `$${((lead.llmCostUsd ?? 0) + (lead.apifyCostUsd ?? 0)).toFixed(4)}`
+                            ? formatKr((lead.llmCostUsd ?? 0) + (lead.apifyCostUsd ?? 0), 4)
                             : "—"}
                         </TableCell>
                         <TableCell>

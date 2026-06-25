@@ -19,6 +19,11 @@ export interface LeadStatusChangedEvent {
   status: string;
 }
 
+export interface LeadDeletedEvent {
+  leadId: number;
+  campaignId: number;
+}
+
 export interface LeadDiscoveredEvent {
   leadId: number;
   campaignId: number;
@@ -58,6 +63,7 @@ export type LeadEventMap = {
   "lead:kpi-updated": LeadKpiUpdatedEvent;
   "lead:enrichment-completed": LeadEnrichmentCompletedEvent;
   "lead:status-changed": LeadStatusChangedEvent;
+  "lead:deleted": LeadDeletedEvent;
   "campaign:discovery-started": CampaignDiscoveryStartedEvent;
   "campaign:discovery-completed": CampaignDiscoveryCompletedEvent;
   "campaign:enrichment-progress": CampaignEnrichmentProgressEvent;

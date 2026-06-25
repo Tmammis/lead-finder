@@ -6,6 +6,7 @@ import type {
   LeadKpiUpdatedEvent,
   LeadEnrichmentCompletedEvent,
   LeadStatusChangedEvent,
+  LeadDeletedEvent,
   CampaignDiscoveryStartedEvent,
   CampaignDiscoveryCompletedEvent,
   CampaignEnrichmentProgressEvent,
@@ -16,6 +17,7 @@ interface LeadEventHandlers {
   onKpiUpdated?: (data: LeadKpiUpdatedEvent) => void;
   onEnrichmentCompleted?: (data: LeadEnrichmentCompletedEvent) => void;
   onStatusChanged?: (data: LeadStatusChangedEvent) => void;
+  onLeadDeleted?: (data: LeadDeletedEvent) => void;
   onDiscoveryStarted?: (data: CampaignDiscoveryStartedEvent) => void;
   onDiscoveryCompleted?: (data: CampaignDiscoveryCompletedEvent) => void;
   onEnrichmentProgress?: (data: CampaignEnrichmentProgressEvent) => void;
@@ -62,6 +64,11 @@ export function useLeadEvents(
       const data = JSON.parse(e.data) as LeadStatusChangedEvent;
       if (optionsRef.current?.leadId && data.leadId !== optionsRef.current.leadId) return;
       handlersRef.current.onStatusChanged?.(data);
+    });
+
+    es.addEventListener("lead:deleted", (e) => {
+      const data = JSON.parse(e.data) as LeadDeletedEvent;
+      handlersRef.current.onLeadDeleted?.(data);
     });
 
     es.addEventListener("campaign:discovery-started", (e) => {

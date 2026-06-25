@@ -8,6 +8,27 @@
       "when": 1773646673565,
       "tag": "0000_nappy_dazzler",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1776009600000,
+      "tag": "0001_add_bokadirekt_sources",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1777680000000,
+      "tag": "0002_add_lead_stage_notes",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1782318780044,
+      "tag": "0003_add_allabolag_config",
+      "breakpoints": true
     }
   ]
 }

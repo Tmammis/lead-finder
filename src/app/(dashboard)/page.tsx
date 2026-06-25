@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { formatKr } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -89,9 +90,9 @@ export default function DashboardPage() {
         />
         <KPICard
           title="Total Cost"
-          value={`$${kpis.totalCost}`}
+          value={formatKr(kpis.totalCost)}
           icon={DollarSign}
-          subtitle={`Apify: $${kpis.totalApifyCost} | LLM: $${kpis.totalLlmCost}`}
+          subtitle={`Apify: ${formatKr(kpis.totalApifyCost)} | LLM: ${formatKr(kpis.totalLlmCost)}`}
         />
       </div>
 

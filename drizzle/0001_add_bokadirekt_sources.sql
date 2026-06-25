@@ -1,0 +1,1 @@
+ALTER TABLE `campaigns` ADD `bokadirekt_sources` text DEFAULT '[]';

@@ -10,6 +10,7 @@ import {
   DollarSign,
   Settings,
   Zap,
+  X,
 } from "lucide-react";
 
 const navItems = [
@@ -20,7 +21,7 @@ const navItems = [
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
-export function Sidebar() {
+export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
 
   return (
@@ -28,6 +29,14 @@ export function Sidebar() {
       <div className="flex h-16 items-center gap-2 border-b px-6">
         <Zap className="h-6 w-6 text-primary" />
         <span className="text-lg font-bold">Lead Finder</span>
+        <button
+          type="button"
+          onClick={onNavigate}
+          aria-label="Close menu"
+          className="ml-auto rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground md:hidden"
+        >
+          <X className="h-5 w-5" />
+        </button>
       </div>
 
       <nav className="flex-1 space-y-1 px-5 py-4">
@@ -41,6 +50,7 @@ export function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
+              onClick={onNavigate}
               className={cn(
                 "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
                 isActive
@@ -57,7 +67,7 @@ export function Sidebar() {
 
       <div className="border-t px-5 py-4">
         <p className="text-xs text-muted-foreground">
-          Made By Jannis Moore + AI
+          Made by Terry Mammis
         </p>
       </div>
     </aside>
