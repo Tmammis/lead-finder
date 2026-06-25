@@ -27,6 +27,9 @@ export async function POST(req: NextRequest) {
     const result = await runSingleActorDiscovery(actorId, input, campaignId);
 
     if (result.status === "failed") {
+      if (result.errorType === "stopped") {
+        return NextResponse.json({ stopped: true, runId: result.runId });
+      }
       return NextResponse.json({ error: result.error || "Discovery failed", runId: result.runId }, { status: 500 });
     }
 

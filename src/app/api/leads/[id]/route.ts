@@ -78,6 +78,9 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     delete body.campaignKpis;
   }
 
+  if ("stage" in body && body.stage === "") body.stage = null;
+  if ("notes" in body && body.notes === "") body.notes = null;
+
   if (Object.keys(body).length > 0) {
     db.update(leads)
       .set({ ...body, updatedAt: new Date().toISOString() })
@@ -96,4 +99,25 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   }
 
   return NextResponse.json(updated);
+}
+
+// Deletes a single lead and its dependent rows from the local DB only.
+// No Apify/external call — this just removes the scraped lead locally.
+export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const db = getDb();
+  const leadId = parseInt(id);
+
+  const lead = db.select().from(leads).where(eq(leads.id, leadId)).get();
+  if (!lead) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  db.delete(leadPersonalization).where(eq(leadPersonalization.leadId, leadId)).run();
+  db.delete(analyticsEvents).where(eq(analyticsEvents.leadId, leadId)).run();
+  db.delete(leads).where(eq(leads.id, leadId)).run();
+
+  if (lead.campaignId) {
+    leadEmitter.emit("lead:deleted", { leadId, campaignId: lead.campaignId });
+  }
+
+  return NextResponse.json({ deleted: true });
 }

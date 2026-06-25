@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useCallback, useState } from "react";
+import { formatKr } from "@/lib/utils";
 import { useParams, useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
@@ -27,6 +29,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useLeadEvents } from "@/hooks/use-lead-events";
+import { copyToClipboardSafe } from "@/lib/utils/clipboard";
 
 interface KpiDefinition {
   id: string;
@@ -42,6 +45,29 @@ interface LeadFieldDefinition {
   description?: string;
 }
 
+const STAGE_OPTIONS = [
+  { value: "no_answer", label: "No answer" },
+  { value: "info_sent_sms", label: "Info sent (SMS)" },
+  { value: "info_sent_email", label: "Info sent (email)" },
+  { value: "interested", label: "Interested" },
+  { value: "not_interested", label: "Not interested" },
+  { value: "meeting_booked", label: "Meeting booked" },
+] as const;
+
+const stageColors: Record<string, string> = {
+  no_answer: "bg-yellow-100 text-yellow-800",
+  info_sent_sms: "bg-blue-100 text-blue-800",
+  info_sent_email: "bg-blue-100 text-blue-800",
+  interested: "bg-green-100 text-green-800",
+  not_interested: "bg-red-100 text-red-800",
+  meeting_booked: "bg-emerald-100 text-emerald-800",
+};
+
+function stageLabel(value: string | null | undefined): string {
+  if (!value) return "Not set";
+  return STAGE_OPTIONS.find((s) => s.value === value)?.label || value;
+}
+
 interface LeadDetail {
   id: number;
   campaignId: number | null;
@@ -51,6 +77,8 @@ interface LeadDetail {
   website: string;
   score: number;
   status: string;
+  stage: string | null;
+  notes: string | null;
   source: string;
   createdAt: string;
   rawData: Record<string, unknown>;
@@ -89,6 +117,7 @@ export default function LeadDetailPage() {
   const [isEditingContact, setIsEditingContact] = useState(false);
   const [editContactValues, setEditContactValues] = useState<Record<string, string>>({});
   const [savingContact, setSavingContact] = useState(false);
+  const [notesDraft, setNotesDraft] = useState<string | null>(null);
 
   const loadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -152,6 +181,41 @@ export default function LeadDetailPage() {
     });
     toast.success(`Status updated to ${status}`);
     load();
+  };
+
+  const handleStageChange = async (stage: string | null) => {
+    setLead((prev) => (prev ? { ...prev, stage } : prev));
+    try {
+      await fetch(`/api/leads/${params.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stage: stage ?? "" }),
+      });
+    } catch {
+      toast.error("Failed to update stage");
+      load();
+    }
+  };
+
+  const saveNotes = async () => {
+    if (notesDraft === null || !lead) return;
+    if ((notesDraft || "") === (lead.notes || "")) {
+      setNotesDraft(null);
+      return;
+    }
+    const valueToSave = notesDraft;
+    setLead((prev) => (prev ? { ...prev, notes: valueToSave || null } : prev));
+    setNotesDraft(null);
+    try {
+      await fetch(`/api/leads/${params.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes: valueToSave }),
+      });
+    } catch {
+      toast.error("Failed to save notes");
+      load();
+    }
   };
 
   const updateKpiValue = (id: string, value: boolean | string) => {
@@ -310,7 +374,7 @@ export default function LeadDetailPage() {
               ) : (
                 <>
                   <InfoRow icon={Mail} label="Email" value={lead.email} />
-                  <InfoRow icon={Phone} label="Phone" value={lead.phone} />
+                  <InfoRow icon={Phone} label="Phone" value={lead.phone} copyable />
                   <InfoRow icon={Globe} label="Website" value={lead.website} link />
                   {lead.leadFieldDefinitions && lead.leadFieldDefinitions.length > 0 && (() => {
                     const mapped = lead.mappedData as Record<string, unknown> | undefined;
@@ -348,6 +412,35 @@ export default function LeadDetailPage() {
               )}
             </CardContent>
           </Card>
+
+          {(() => {
+            const m = (lead.mappedData as Record<string, unknown> | undefined) || {};
+            if (!m.allabolagMatch) return null;
+            const employees = m.allabolagEmployees;
+            const revenueSek = typeof m.allabolagRevenueSek === "number" ? m.allabolagRevenueSek : null;
+            const owner = typeof m.allabolagOwner === "string" ? m.allabolagOwner : null;
+            const ownerRole = typeof m.allabolagOwnerRole === "string" ? m.allabolagOwnerRole : null;
+            const url = typeof m.allabolagUrl === "string" ? m.allabolagUrl : null;
+            const revenueLabel = revenueSek != null
+              ? `${(revenueSek / 1_000_000).toLocaleString("sv-SE", { maximumFractionDigits: 1 })} MSEK`
+              : null;
+            const matchNote = m.allabolagMatch === "matched" ? null
+              : m.allabolagMatch === "dropped" ? `Archived — ${String(m.allabolagDropReason ?? "out of range")}`
+              : m.allabolagMatch === "needs_review" ? "No confident company match — review manually"
+              : m.allabolagMatch === "lookup_failed" ? "allabolag lookup failed" : null;
+            return (
+              <Card>
+                <CardHeader><CardTitle>Company (allabolag)</CardTitle></CardHeader>
+                <CardContent className="space-y-3">
+                  <InfoRow icon={Hash} label="Employees" value={employees != null ? String(employees) : undefined} />
+                  <InfoRow icon={DollarSign} label="Revenue (latest year)" value={revenueLabel ?? undefined} />
+                  <InfoRow icon={Tag} label="Owner" value={owner ? (ownerRole ? `${owner} (${ownerRole})` : owner) : undefined} copyable />
+                  <InfoRow icon={ExternalLink} label="allabolag" value={url ?? undefined} link />
+                  {matchNote && <p className="text-xs text-muted-foreground">{matchNote}</p>}
+                </CardContent>
+              </Card>
+            );
+          })()}
 
           {p && (
             <Card>
@@ -510,6 +603,52 @@ export default function LeadDetailPage() {
           </Card>
 
           <Card>
+            <CardHeader><CardTitle>Outreach</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground font-medium">Stage</p>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button className="w-full focus:outline-none">
+                      <Badge className={`${lead.stage ? stageColors[lead.stage] || "" : "bg-gray-100 text-gray-600"} cursor-pointer hover:opacity-80 transition-opacity w-full justify-center py-1.5 text-sm`}>
+                        {stageLabel(lead.stage)}
+                      </Badge>
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-56">
+                    <DropdownMenuItem
+                      onClick={() => handleStageChange(null)}
+                      disabled={!lead.stage}
+                    >
+                      <Badge className="bg-gray-100 text-gray-600 mr-2">—</Badge>
+                      Clear
+                    </DropdownMenuItem>
+                    {STAGE_OPTIONS.map((s) => (
+                      <DropdownMenuItem
+                        key={s.value}
+                        onClick={() => handleStageChange(s.value)}
+                        disabled={s.value === lead.stage}
+                      >
+                        <Badge className={`${stageColors[s.value] || ""} mr-2`}>{s.label}</Badge>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground font-medium">Notes</p>
+                <Textarea
+                  value={notesDraft ?? lead.notes ?? ""}
+                  onChange={(e) => setNotesDraft(e.target.value)}
+                  onBlur={saveNotes}
+                  placeholder="Add notes..."
+                  className="min-h-[80px] text-sm"
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
             <CardHeader>
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm">Raw Data</CardTitle>
@@ -579,18 +718,18 @@ export default function LeadDetailPage() {
                 <CardContent className="space-y-3">
                   <div className="flex justify-between items-baseline">
                     <span className="text-sm font-medium">Total Cost</span>
-                    <span className="text-lg font-bold tabular-nums">${totalCost.toFixed(4)}</span>
+                    <span className="text-lg font-bold tabular-nums">{formatKr(totalCost, 4)}</span>
                   </div>
                   <Separator />
                   <div className="space-y-2">
                     <p className="text-xs font-medium text-muted-foreground">Discovery</p>
                     <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
                       <span className="text-muted-foreground">LLM</span>
-                      <span className="text-right tabular-nums">${discoveryLlm.toFixed(4)}</span>
+                      <span className="text-right tabular-nums">{formatKr(discoveryLlm, 4)}</span>
                       <span className="text-muted-foreground">Apify</span>
-                      <span className="text-right tabular-nums">${discoveryApify.toFixed(4)}</span>
+                      <span className="text-right tabular-nums">{formatKr(discoveryApify, 4)}</span>
                       <span className="font-medium">Subtotal</span>
-                      <span className="text-right font-medium tabular-nums">${discoveryCost.toFixed(4)}</span>
+                      <span className="text-right font-medium tabular-nums">{formatKr(discoveryCost, 4)}</span>
                     </div>
                   </div>
                   {isEnriched && enrichmentCost > 0 && (
@@ -598,11 +737,11 @@ export default function LeadDetailPage() {
                       <p className="text-xs font-medium text-muted-foreground">Enrichment</p>
                       <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
                         <span className="text-muted-foreground">LLM</span>
-                        <span className="text-right tabular-nums">${enrichmentLlm.toFixed(4)}</span>
+                        <span className="text-right tabular-nums">{formatKr(enrichmentLlm, 4)}</span>
                         <span className="text-muted-foreground">Apify</span>
-                        <span className="text-right tabular-nums">${enrichmentApify.toFixed(4)}</span>
+                        <span className="text-right tabular-nums">{formatKr(enrichmentApify, 4)}</span>
                         <span className="font-medium">Subtotal</span>
-                        <span className="text-right font-medium tabular-nums">${enrichmentCost.toFixed(4)}</span>
+                        <span className="text-right font-medium tabular-nums">{formatKr(enrichmentCost, 4)}</span>
                       </div>
                     </div>
                   )}
@@ -648,24 +787,53 @@ function InfoRow({
   label,
   value,
   link,
+  copyable,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   value: string | undefined | null;
   link?: boolean;
+  copyable?: boolean;
 }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    if (!value) return;
+    const ok = await copyToClipboardSafe(value);
+    if (ok) {
+      setCopied(true);
+      toast.success("Copied to clipboard");
+      setTimeout(() => setCopied(false), 1500);
+    } else {
+      toast.error("Could not copy");
+    }
+  };
+
   return (
     <div className="flex items-start gap-3">
       <Icon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
       <span className="text-sm text-muted-foreground w-32 shrink-0">{label}</span>
       {value ? (
-        link ? (
-          <a href={value.startsWith("http") ? value : `https://${value}`} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline min-w-0 break-words">
-            {value}
-          </a>
-        ) : (
-          <span className="text-sm min-w-0 break-words">{value}</span>
-        )
+        <div className="flex items-start gap-2 min-w-0">
+          {link ? (
+            <a href={value.startsWith("http") ? value : `https://${value}`} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline min-w-0 break-words">
+              {value}
+            </a>
+          ) : (
+            <span className="text-sm min-w-0 break-words">{value}</span>
+          )}
+          {copyable && (
+            <button
+              type="button"
+              onClick={handleCopy}
+              title={copied ? "Copied!" : "Copy"}
+              aria-label="Copy"
+              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors shrink-0 -mt-0.5"
+            >
+              {copied ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
+            </button>
+          )}
+        </div>
       ) : (
         <span className="text-sm text-muted-foreground/50 italic">Not set</span>
       )}
@@ -710,10 +878,9 @@ function RawDataBlock({
   onExpand: (v: { title: string; data: unknown }) => void;
 }) {
   const json = JSON.stringify(data, null, 2);
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(json).then(() => {
-      toast.success("Copied to clipboard");
-    });
+  const copyToClipboard = async () => {
+    const ok = await copyToClipboardSafe(json);
+    toast[ok ? "success" : "error"](ok ? "Copied to clipboard" : "Could not copy");
   };
   return (
     <div>

@@ -2,7 +2,7 @@ import { getDb, getAgencyType } from "../db";
 import { leads, leadPersonalization, campaigns, apifyRuns, type KpiDefinition, type LeadFieldDefinition } from "../db/schema";
 import { eq, and } from "drizzle-orm";
 import { coerceActorInput } from "../apify/coerce-input";
-import { runActorAndCollect } from "../apify/runner";
+import { runActorAndCollect, isCampaignStopped, clearCampaignStopped } from "../apify/runner";
 import { getActorById } from "../apify/registry-server";
 import { scoreLead } from "../ai/lead-scorer";
 import { extractAllFields } from "../ai/lead-extractor";
@@ -317,6 +317,10 @@ export async function enrichCampaignLeads(
   const agencyType = _agencyType || getAgencyType();
   const db = getDb();
 
+  // Clear any stale stop flag so a freshly-started enrichment run isn't aborted
+  // by a previous Stop. The stop endpoint re-sets it (plus cancelEnrichment).
+  clearCampaignStopped(campaignId);
+
   db.update(leads)
     .set({ status: "new", updatedAt: new Date().toISOString() })
     .where(and(
@@ -353,7 +357,7 @@ export async function enrichCampaignLeads(
   let skipped = 0;
 
   for (let i = 0; i < leadsToProcess.length; i += concurrency) {
-    if (cancelledEnrichments.has(campaignId)) break;
+    if (cancelledEnrichments.has(campaignId) || isCampaignStopped(campaignId)) break;
     if (!options?.manual) {
       const fresh = db.select({ status: campaigns.status }).from(campaigns).where(eq(campaigns.id, campaignId)).get();
       if (fresh?.status === "paused") break;

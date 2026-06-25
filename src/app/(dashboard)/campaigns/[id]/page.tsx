@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useCallback, useState } from "react";
+import { formatKr } from "@/lib/utils";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -43,11 +44,13 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { ScoreBadgeCompact } from "@/components/score-badge";
+import { CopyButton } from "@/components/copy-button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useLeadEvents } from "@/hooks/use-lead-events";
 import { getLeadDisplayName } from "@/lib/utils/lead-display";
 import { SortableList } from "@/components/sortable-list";
-import type { LeadFieldDefinition, KpiDefinition } from "@/lib/db/schema";
+import type { LeadFieldDefinition, KpiDefinition, AllabolagConfig } from "@/lib/db/schema";
+import { AllabolagSettings } from "@/components/campaigns/allabolag-settings";
 
 interface CampaignDetail {
   id: number;
@@ -63,6 +66,7 @@ interface CampaignDetail {
   searchParams: Record<string, unknown>;
   kpiDefinitions?: Array<{ id: string; label: string; type: "boolean" | "text"; description?: string }>;
   leadFieldDefinitions?: LeadFieldDefinition[];
+  allabolagConfig?: AllabolagConfig | null;
   leads: Array<{
     id: number;
     displayName: string | null;
@@ -111,6 +115,7 @@ export default function CampaignDetailPage() {
   const [savingSettings, setSavingSettings] = useState(false);
   const [runningActor, setRunningActor] = useState<string | null>(null);
   const [enrichingNow, setEnrichingNow] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [enrichAbort, setEnrichAbort] = useState<AbortController | null>(null);
   const [lastActorResult, setLastActorResult] = useState<{ actorId: string; inserted: number; total: number } | null>(null);
   const [disabledEnrichActors, setDisabledEnrichActors] = useState<Set<string>>(new Set());
@@ -129,8 +134,10 @@ export default function CampaignDetailPage() {
   const [globalEnrichConcurrency, setGlobalEnrichConcurrency] = useState<number>(1);
   const [editLeadFields, setEditLeadFields] = useState<LeadFieldDefinition[]>([]);
   const [editKpis, setEditKpis] = useState<KpiDefinition[]>([]);
+  const [editAllabolag, setEditAllabolag] = useState<AllabolagConfig | null>(null);
   const [collapsedActors, setCollapsedActors] = useState<Set<string>>(new Set());
   const [addActorOpen, setAddActorOpen] = useState(false);
+  const [recheckingAllabolag, setRecheckingAllabolag] = useState(false);
 
   const openSettings = () => {
     if (!campaign) return;
@@ -153,6 +160,7 @@ export default function CampaignDetailPage() {
     });
     setEditLeadFields(campaign.leadFieldDefinitions ? campaign.leadFieldDefinitions.map((f) => ({ ...f })) : []);
     setEditKpis(campaign.kpiDefinitions ? campaign.kpiDefinitions.map((k) => ({ ...k })) : []);
+    setEditAllabolag(campaign.allabolagConfig ?? null);
     setCollapsedActors(new Set(campaign.apifyActors || []));
     setSettingsOpen(true);
   };
@@ -194,6 +202,7 @@ export default function CampaignDetailPage() {
           apifyActors: editSettings.actorOrder,
           leadFieldDefinitions: editLeadFields.filter((f) => f.label.trim()),
           kpiDefinitions: editKpis.filter((k) => k.label.trim()),
+          allabolagConfig: editAllabolag,
         }),
       });
       if (!res.ok) throw new Error("Failed to save settings");
@@ -281,6 +290,11 @@ export default function CampaignDetailPage() {
         load();
       },
       onStatusChanged: () => load(),
+      onLeadDeleted: (data) => {
+        setCampaign((prev) =>
+          prev ? { ...prev, leads: prev.leads.filter((l) => l.id !== data.leadId) } : prev
+        );
+      },
       onDiscoveryStarted: (data) => {
         if (data.actorIds.length > 0) setRunningActor(data.actorIds[0]);
         setDiscoveryProgress(null);
@@ -306,6 +320,53 @@ export default function CampaignDetailPage() {
 
   const serverIsEnriching = campaign.leads.some((l) => l.status === "enriching");
   const isEnrichmentActive = enrichingNow || serverIsEnriching || reEnrichingLeads.size > 0;
+
+  const handleStop = async () => {
+    if (!campaign) return;
+    setStopping(true);
+    // Abort the client-side enrichment request immediately so the UI stops waiting.
+    enrichAbort?.abort();
+    try {
+      const res = await fetch(`/api/campaigns/${campaign.id}/stop`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Failed to stop");
+        return;
+      }
+      toast.success(
+        data.abortedRuns > 0
+          ? `Stopped — aborted ${data.abortedRuns} running Apify ${data.abortedRuns === 1 ? "run" : "runs"}`
+          : "Stopped"
+      );
+    } catch (err) {
+      toast.error(String(err));
+    } finally {
+      setStopping(false);
+      setEnrichingNow(false);
+      setEnrichAbort(null);
+      setRunningActor(null);
+      setDiscoveryProgress(null);
+      load();
+    }
+  };
+
+  const handleRecheckAllabolag = async () => {
+    if (!campaign) return;
+    setRecheckingAllabolag(true);
+    try {
+      const res = await fetch(`/api/campaigns/${campaign.id}/recheck-allabolag`, { method: "POST" });
+      if (!res.ok) throw new Error("failed");
+      const s = await res.json() as { rechecked: number; nowMatched: number; nowArchived: number; stillNeedsReview: number };
+      toast.success(
+        `Re-checked ${s.rechecked}: ${s.nowMatched} matched, ${s.nowArchived} archived, ${s.stillNeedsReview} still need review`,
+      );
+      loadNow();
+    } catch {
+      toast.error("Allabolag re-check failed");
+    } finally {
+      setRecheckingAllabolag(false);
+    }
+  };
 
   const triggerEnrichment = async () => {
     setEnrichingNow(true);
@@ -352,6 +413,10 @@ export default function CampaignDetailPage() {
         body: JSON.stringify({ actorId, input: actorConfig, campaignId: campaign.id }),
       });
       const data = await res.json();
+      if (data.stopped) {
+        toast.info("Scraper stopped");
+        return;
+      }
       if (!res.ok) {
         setDiscoveryError({ message: data.error || "Actor run failed", actionUrl: data.actionUrl, actionLabel: data.actionLabel });
         return;
@@ -414,6 +479,26 @@ export default function CampaignDetailPage() {
           return next;
         });
         load();
+      });
+  };
+
+  const handleDeleteLead = (leadId: number) => {
+    // Local-only delete: removes the scraped lead from this campaign's DB.
+    // No Apify/external call is made.
+    const snapshot = campaign?.leads;
+    setCampaign((prev) =>
+      prev ? { ...prev, leads: prev.leads.filter((l) => l.id !== leadId) } : prev
+    );
+
+    fetch(`/api/leads/${leadId}`, { method: "DELETE" })
+      .then((res) => {
+        if (!res.ok) throw new Error("Delete failed");
+        toast.success("Lead deleted");
+      })
+      .catch((err) => {
+        // Restore the row on failure.
+        setCampaign((prev) => (prev && snapshot ? { ...prev, leads: snapshot } : prev));
+        toast.error(String(err));
       });
   };
 
@@ -605,7 +690,7 @@ export default function CampaignDetailPage() {
                 <PopoverTrigger asChild>
                   <div className="flex-1 min-w-[120px] px-4 cursor-pointer hover:bg-muted/50 rounded-md -my-1 py-1 transition-colors">
                     <p className="text-xs text-muted-foreground inline-flex items-center gap-1">Total Cost <Info className="h-2.5 w-2.5" /></p>
-                    <p className="text-lg font-semibold">${campaign.stats.totalCost.toFixed(4)}</p>
+                    <p className="text-lg font-semibold">{formatKr(campaign.stats.totalCost, 4)}</p>
                   </div>
                 </PopoverTrigger>
                 <PopoverContent side="bottom" align="start" className="w-56 p-3 space-y-2">
@@ -613,24 +698,24 @@ export default function CampaignDetailPage() {
                   <div className="space-y-1.5 text-sm">
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Avg / Lead</span>
-                      <span className="font-medium">${campaign.stats.avgCostPerLead.toFixed(4)}</span>
+                      <span className="font-medium">{formatKr(campaign.stats.avgCostPerLead, 4)}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Avg Discovery</span>
-                      <span className="font-medium">${campaign.stats.avgDiscoveryCost.toFixed(4)}</span>
+                      <span className="font-medium">{formatKr(campaign.stats.avgDiscoveryCost, 4)}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Avg Enrichment</span>
-                      <span className="font-medium">${campaign.stats.avgEnrichmentCost.toFixed(4)}</span>
+                      <span className="font-medium">{formatKr(campaign.stats.avgEnrichmentCost, 4)}</span>
                     </div>
                     <Separator />
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Apify</span>
-                      <span className="font-medium">${campaign.stats.apifyCost.toFixed(4)}</span>
+                      <span className="font-medium">{formatKr(campaign.stats.apifyCost, 4)}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">LLM</span>
-                      <span className="font-medium">${campaign.stats.llmCost.toFixed(4)}</span>
+                      <span className="font-medium">{formatKr(campaign.stats.llmCost, 4)}</span>
                     </div>
                   </div>
                 </PopoverContent>
@@ -644,10 +729,38 @@ export default function CampaignDetailPage() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle>Discovery Configuration</CardTitle>
-            <Badge variant="outline" className="capitalize">
-              <Clock className="mr-1 h-3 w-3" />
-              {campaign.scheduleFrequency}
-            </Badge>
+            <div className="flex items-center gap-2">
+              {(isRunning || isEnrichmentActive) && (
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={handleStop}
+                  disabled={stopping}
+                  title="Stop scraping and enrichment, and abort any running Apify actor"
+                >
+                  {stopping
+                    ? <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> Stopping...</>
+                    : <><Power className="mr-1.5 h-3.5 w-3.5" /> Stop</>}
+                </Button>
+              )}
+              {campaign.allabolagConfig?.enabled && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleRecheckAllabolag}
+                  disabled={recheckingAllabolag}
+                >
+                  {recheckingAllabolag ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : null}
+                  Re-check allabolag
+                </Button>
+              )}
+              <Badge variant="outline" className="capitalize">
+                <Clock className="mr-1 h-3 w-3" />
+                {campaign.scheduleFrequency}
+              </Badge>
+            </div>
           </div>
           {campaign.lastDiscoveryAt && (
             <p className="text-xs text-muted-foreground">
@@ -862,6 +975,22 @@ export default function CampaignDetailPage() {
                 <DropdownMenuContent align="start" className="w-48">
                   <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
                   <DropdownMenuSeparator />
+                  {(["email", "phone"] as const).map((key) => (
+                    <DropdownMenuCheckboxItem
+                      key={key}
+                      checked={extraColumns.has(key)}
+                      onCheckedChange={(checked) => {
+                        setExtraColumns((prev) => {
+                          const next = new Set(prev);
+                          if (checked) next.add(key);
+                          else next.delete(key);
+                          return next;
+                        });
+                      }}
+                    >
+                      {key === "email" ? "Email" : "Phone"}
+                    </DropdownMenuCheckboxItem>
+                  ))}
                   {(campaign.leadFieldDefinitions ?? []).map((f) => (
                     <DropdownMenuCheckboxItem
                       key={f.id}
@@ -952,6 +1081,8 @@ export default function CampaignDetailPage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead className="min-w-[180px] max-w-[200px]">Label</TableHead>
+                      {extraColumns.has("email") && <TableHead className="min-w-[160px] max-w-[220px]">Email</TableHead>}
+                      {extraColumns.has("phone") && <TableHead className="min-w-[120px] max-w-[180px]">Phone</TableHead>}
                       {dynFields.filter((f) => extraColumns.has(`field:${f.id}`)).map((f) => (
                         <TableHead key={f.id} className="min-w-[120px] max-w-[200px]">{f.label}</TableHead>
                       ))}
@@ -977,6 +1108,26 @@ export default function CampaignDetailPage() {
                               {label}
                             </Link>
                           </TableCell>
+                          {extraColumns.has("email") && (
+                            <TableCell className="text-sm max-w-[220px]">
+                              {lead.email ? (
+                                <div className="flex items-center gap-1 min-w-0">
+                                  <a href={`mailto:${lead.email}`} className="text-primary hover:underline truncate">{lead.email}</a>
+                                  <CopyButton value={lead.email} label="email" />
+                                </div>
+                              ) : <span className="text-muted-foreground">—</span>}
+                            </TableCell>
+                          )}
+                          {extraColumns.has("phone") && (
+                            <TableCell className="text-sm max-w-[180px]">
+                              {lead.phone ? (
+                                <div className="flex items-center gap-1 min-w-0">
+                                  <span className="truncate">{lead.phone}</span>
+                                  <CopyButton value={lead.phone} label="phone" />
+                                </div>
+                              ) : <span className="text-muted-foreground">—</span>}
+                            </TableCell>
+                          )}
                           {dynFields.filter((f) => extraColumns.has(`field:${f.id}`)).map((f) => {
                             const val = resolveFieldValue(lead, f);
                             if ((f.type === "url" || val.startsWith("http")) && val !== "—") {
@@ -1006,42 +1157,53 @@ export default function CampaignDetailPage() {
                             <Badge className={statusColor[status] || ""}>{status}</Badge>
                           </TableCell>
                           <TableCell className="max-w-[200px]">
-                            {reEnrichingLeads.has(lead.id) ? (
-                              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                            ) : (lead.status === "new" || lead.status === "enriching") ? (
-                              <div className="flex items-center gap-0.5">
-                                {lead.status === "new" && (
+                            <div className="flex items-center gap-0.5">
+                              {reEnrichingLeads.has(lead.id) ? (
+                                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                              ) : (lead.status === "new" || lead.status === "enriching") ? (
+                                <>
+                                  {lead.status === "new" && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="cursor-pointer"
+                                      onClick={() => handleReEnrich(lead.id)}
+                                      title="Enrich lead"
+                                    >
+                                      <Zap className="h-4 w-4" />
+                                    </Button>
+                                  )}
                                   <Button
                                     size="sm"
                                     variant="ghost"
                                     className="cursor-pointer"
-                                    onClick={() => handleReEnrich(lead.id)}
-                                    title="Enrich lead"
+                                    onClick={() => handleSkipEnrichment(lead.id)}
+                                    title="Skip enrichment"
                                   >
-                                    <Zap className="h-4 w-4" />
+                                    <ChevronsRight className="h-4 w-4" />
                                   </Button>
-                                )}
+                                </>
+                              ) : (lead.status === "qualified" || lead.status === "converted" || lead.status === "declined") ? (
                                 <Button
                                   size="sm"
                                   variant="ghost"
                                   className="cursor-pointer"
-                                  onClick={() => handleSkipEnrichment(lead.id)}
-                                  title="Skip enrichment"
+                                  onClick={() => handleReEnrich(lead.id)}
+                                  title="Re-enrich"
                                 >
-                                  <ChevronsRight className="h-4 w-4" />
+                                  <RotateCw className="h-4 w-4" />
                                 </Button>
-                              </div>
-                            ) : (lead.status === "qualified" || lead.status === "converted" || lead.status === "declined") ? (
+                              ) : null}
                               <Button
                                 size="sm"
                                 variant="ghost"
-                                className="cursor-pointer"
-                                onClick={() => handleReEnrich(lead.id)}
-                                title="Re-enrich"
+                                className="cursor-pointer text-muted-foreground hover:text-destructive"
+                                onClick={() => handleDeleteLead(lead.id)}
+                                title="Delete lead"
                               >
-                                <RotateCw className="h-4 w-4" />
+                                <Trash2 className="h-4 w-4" />
                               </Button>
-                            ) : null}
+                            </div>
                           </TableCell>
                         </TableRow>
                       );
@@ -1080,7 +1242,7 @@ export default function CampaignDetailPage() {
                         </Badge>
                       </TableCell>
                       <TableCell>{run.resultCount}</TableCell>
-                      <TableCell className="text-sm">{run.costUsd != null ? `$${run.costUsd.toFixed(4)}` : "—"}</TableCell>
+                      <TableCell className="text-sm">{run.costUsd != null ? formatKr(run.costUsd, 4) : "—"}</TableCell>
                       <TableCell className="text-xs">{new Date(run.startedAt).toLocaleString()}</TableCell>
                     </TableRow>
                   );
@@ -1160,6 +1322,8 @@ export default function CampaignDetailPage() {
                 </div>
 
               </div>
+
+              <AllabolagSettings value={editAllabolag} onChange={setEditAllabolag} />
 
               {(() => {
                 const actorsForSettings = (editSettings.actorOrder || campaign.apifyActors || []).filter((id) => getActorById(id));

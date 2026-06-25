@@ -1,0 +1,1 @@
+ALTER TABLE `campaigns` ADD `allabolag_config` text DEFAULT 'null';

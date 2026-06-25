@@ -33,6 +33,7 @@ export async function GET(req: NextRequest) {
         "lead:kpi-updated",
         "lead:enrichment-completed",
         "lead:status-changed",
+        "lead:deleted",
         "campaign:discovery-started",
         "campaign:discovery-completed",
         "campaign:enrichment-progress",

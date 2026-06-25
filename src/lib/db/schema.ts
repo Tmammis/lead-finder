@@ -15,6 +15,27 @@ export type LeadFieldDefinition = {
   description?: string;
 };
 
+export type BokadirektSource = {
+  id: string;
+  city: string;
+  category?: string;
+  maxPages: number;
+};
+
+// Per-campaign config for the allabolag.se enrichment step, which looks up
+// each lead's employees, latest-year revenue, and owner, then drops (archives)
+// leads outside the employee/revenue ranges. Revenue bounds are in SEK.
+export type AllabolagConfig = {
+  enabled: boolean;
+  employeesMin: number;
+  employeesMax: number;
+  revenueMinSek: number;
+  revenueMaxSek: number;
+  /** Auto-run allabolag after discovery, independent of campaign.autoEnrich.
+   *  Missing is treated as true (preserves pre-existing behavior). */
+  autoEnrich?: boolean;
+};
+
 export const campaigns = sqliteTable("campaigns", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),
@@ -26,6 +47,8 @@ export const campaigns = sqliteTable("campaigns", {
   actorConfigs: text("actor_configs", { mode: "json" }).$type<Record<string, Record<string, unknown>>>().default({}),
   kpiDefinitions: text("kpi_definitions", { mode: "json" }).$type<KpiDefinition[]>().default([]),
   leadFieldDefinitions: text("lead_field_definitions", { mode: "json" }).$type<LeadFieldDefinition[]>().default([]),
+  bokadirektSources: text("bokadirekt_sources", { mode: "json" }).$type<BokadirektSource[]>().default([]),
+  allabolagConfig: text("allabolag_config", { mode: "json" }).$type<AllabolagConfig | null>().default(null),
   scheduleFrequency: text("schedule_frequency", { enum: ["once", "daily", "weekly"] }).notNull().default("once"),
   lastDiscoveryAt: text("last_discovery_at"),
   aiProvider: text("ai_provider", { enum: ["openai", "anthropic"] }).notNull().default("openai"),
@@ -51,6 +74,17 @@ export const leads = sqliteTable("leads", {
   status: text("status", {
     enum: ["new", "enriching", "qualified", "converted", "declined", "archived"],
   }).notNull().default("new"),
+  stage: text("stage", {
+    enum: [
+      "no_answer",
+      "info_sent_sms",
+      "info_sent_email",
+      "interested",
+      "not_interested",
+      "meeting_booked",
+    ],
+  }),
+  notes: text("notes"),
   rawData: text("raw_data", { mode: "json" }).$type<Record<string, unknown>>().default({}),
   mappedData: text("mapped_data", { mode: "json" }).$type<Record<string, unknown>>().default({}),
   llmCostUsd: real("llm_cost_usd").default(0),

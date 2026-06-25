@@ -4,6 +4,27 @@ import { eq } from "drizzle-orm";
 
 const APIFY_BASE_URL = "https://api.apify.com/v2";
 
+// Per-campaign "stop" flag, stashed on globalThis so it survives module reloads
+// in dev and is shared across requests in the single Node process. When a
+// campaign id is in this set, any in-flight poll loop for that campaign bails
+// immediately (the stop endpoint also aborts the Apify run itself). This only
+// works in single-process dev/prod; a multi-instance deployment would need DB
+// state instead (same caveat as cancelEnrichment in the pipeline).
+const globalForApifyStop = globalThis as unknown as { stoppedApifyCampaigns?: Set<number> };
+const stoppedApifyCampaigns = (globalForApifyStop.stoppedApifyCampaigns ??= new Set<number>());
+
+export function markCampaignStopped(campaignId: number): void {
+  stoppedApifyCampaigns.add(campaignId);
+}
+
+export function clearCampaignStopped(campaignId: number): void {
+  stoppedApifyCampaigns.delete(campaignId);
+}
+
+export function isCampaignStopped(campaignId: number): boolean {
+  return stoppedApifyCampaigns.has(campaignId);
+}
+
 export interface ApifyRunResult {
   runId: string;
   datasetId: string;
@@ -143,15 +164,44 @@ export async function startActorRun(
   return runId;
 }
 
+// Abort a running Apify run on Apify's side so it stops immediately and stops
+// accruing cost. Best-effort: network/HTTP failures are swallowed (the run may
+// already have finished) but the local apify_runs row is marked failed.
+export async function abortRun(runId: string): Promise<void> {
+  const token = getToken();
+  try {
+    await fetch(`${APIFY_BASE_URL}/actor-runs/${runId}/abort`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch (err) {
+    console.error(`Failed to abort Apify run ${runId}:`, err);
+  }
+
+  const db = getDb();
+  db.update(apifyRuns)
+    .set({ status: "failed", finishedAt: new Date().toISOString() })
+    .where(eq(apifyRuns.runId, runId))
+    .run();
+}
+
 export async function pollRunUntilDone(
   runId: string,
-  maxWaitMs = 300_000,
+  campaignId?: number,
+  maxWaitMs = 600_000,
   intervalMs = 5_000
 ): Promise<{ status: string; datasetId: string }> {
   const token = getToken();
   const start = Date.now();
 
   while (Date.now() - start < maxWaitMs) {
+    // User pressed Stop: the stop endpoint has already aborted the run on
+    // Apify's side, so bail out of polling immediately instead of waiting for
+    // the next tick to observe the ABORTED status.
+    if (campaignId != null && isCampaignStopped(campaignId)) {
+      return { status: "ABORTED", datasetId: "" };
+    }
+
     const res = await fetch(`${APIFY_BASE_URL}/actor-runs/${runId}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -183,7 +233,7 @@ export async function pollRunUntilDone(
   }
 
   throw new ApifyError(
-    "The discovery run timed out. Try reducing the search scope (fewer search terms or lower result limits).",
+    "The discovery run timed out after 10 minutes. Try reducing the search scope (fewer search terms or lower result limits).",
     "timeout"
   );
 }
@@ -221,7 +271,7 @@ export async function runActorAndCollect(
   campaignId?: number
 ): Promise<ApifyRunResult> {
   const runId = await startActorRun(actorId, input, campaignId);
-  const { status, datasetId } = await pollRunUntilDone(runId);
+  const { status, datasetId } = await pollRunUntilDone(runId, campaignId);
 
   let items: Record<string, unknown>[] = [];
   if (status === "SUCCEEDED" && datasetId) {
