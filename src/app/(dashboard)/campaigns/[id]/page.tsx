@@ -137,6 +137,7 @@ export default function CampaignDetailPage() {
   const [editAllabolag, setEditAllabolag] = useState<AllabolagConfig | null>(null);
   const [collapsedActors, setCollapsedActors] = useState<Set<string>>(new Set());
   const [addActorOpen, setAddActorOpen] = useState(false);
+  const [recheckingAllabolag, setRecheckingAllabolag] = useState(false);
 
   const openSettings = () => {
     if (!campaign) return;
@@ -346,6 +347,24 @@ export default function CampaignDetailPage() {
       setRunningActor(null);
       setDiscoveryProgress(null);
       load();
+    }
+  };
+
+  const handleRecheckAllabolag = async () => {
+    if (!campaign) return;
+    setRecheckingAllabolag(true);
+    try {
+      const res = await fetch(`/api/campaigns/${campaign.id}/recheck-allabolag`, { method: "POST" });
+      if (!res.ok) throw new Error("failed");
+      const s = await res.json() as { rechecked: number; nowMatched: number; nowArchived: number; stillNeedsReview: number };
+      toast.success(
+        `Re-checked ${s.rechecked}: ${s.nowMatched} matched, ${s.nowArchived} archived, ${s.stillNeedsReview} still need review`,
+      );
+      loadNow();
+    } catch {
+      toast.error("Allabolag re-check failed");
+    } finally {
+      setRecheckingAllabolag(false);
     }
   };
 
@@ -722,6 +741,19 @@ export default function CampaignDetailPage() {
                   {stopping
                     ? <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> Stopping...</>
                     : <><Power className="mr-1.5 h-3.5 w-3.5" /> Stop</>}
+                </Button>
+              )}
+              {campaign.allabolagConfig?.enabled && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleRecheckAllabolag}
+                  disabled={recheckingAllabolag}
+                >
+                  {recheckingAllabolag ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : null}
+                  Re-check allabolag
                 </Button>
               )}
               <Badge variant="outline" className="capitalize">
