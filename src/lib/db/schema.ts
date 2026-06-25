@@ -31,6 +31,9 @@ export type AllabolagConfig = {
   employeesMax: number;
   revenueMinSek: number;
   revenueMaxSek: number;
+  /** Auto-run allabolag after discovery, independent of campaign.autoEnrich.
+   *  Missing is treated as true (preserves pre-existing behavior). */
+  autoEnrich?: boolean;
 };
 
 export const campaigns = sqliteTable("campaigns", {
