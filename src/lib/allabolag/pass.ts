@@ -1,10 +1,11 @@
 import { getDb } from "../db";
-import { leads, type AllabolagConfig, type Lead } from "../db/schema";
-import { eq } from "drizzle-orm";
+import { leads, campaigns, type AllabolagConfig, type Lead } from "../db/schema";
+import { eq, and, inArray } from "drizzle-orm";
 import { matchLead, evaluate } from "./enricher";
 import { nameContainsPlace } from "./swedish-places";
 import type { AllabolagMatch } from "./types";
 import { leadEmitter } from "../events/emitter";
+import { isCampaignStopped } from "../apify/runner";
 
 // Best-effort extraction of a lead's city, used to disambiguate same-named
 // companies on allabolag. Returns null when no city can be determined.
@@ -121,4 +122,58 @@ export async function applyAllabolag(
 
   mergeMappedData(db, leadId, { ...base, allabolagMatch: "matched" });
   return "kept";
+}
+
+export type AllabolagRunSummary = {
+  rechecked: number;
+  nowMatched: number;
+  nowArchived: number;
+  stillNeedsReview: number;
+};
+
+// Shared allabolag pass. With leadIds, processes exactly those leads
+// (post-discovery: the newly inserted leads). Without, processes the campaign's
+// not-yet-confirmed leads (allabolagMatch needs_review / lookup_failed / absent).
+// Never touches leads already "matched" or "dropped".
+export async function runCampaignAllabolag(
+  campaignId: number,
+  leadIds?: number[],
+): Promise<AllabolagRunSummary> {
+  const db = getDb();
+  const summary: AllabolagRunSummary = {
+    rechecked: 0, nowMatched: 0, nowArchived: 0, stillNeedsReview: 0,
+  };
+
+  const campaign = db.select().from(campaigns).where(eq(campaigns.id, campaignId)).get();
+  const cfg = (campaign?.allabolagConfig as AllabolagConfig | null) ?? null;
+  if (!cfg?.enabled) return summary;
+
+  const rows = leadIds && leadIds.length > 0
+    ? db.select().from(leads).where(and(eq(leads.campaignId, campaignId), inArray(leads.id, leadIds))).all()
+    : db.select().from(leads).where(eq(leads.campaignId, campaignId)).all();
+
+  for (const lead of rows) {
+    if (isCampaignStopped(campaignId)) break;
+    if (!lead.displayName) continue;
+    const prior = (lead.mappedData as Record<string, unknown> | null)?.allabolagMatch;
+    // Skip leads with a confirmed verdict — only recover unmatched ones.
+    if (prior === "matched" || prior === "dropped") continue;
+
+    const outcome = await applyAllabolag(lead.id, lead, cfg);
+    summary.rechecked++;
+    if (outcome === "dropped") {
+      summary.nowArchived++;
+    } else {
+      const after = db.select({ mappedData: leads.mappedData }).from(leads).where(eq(leads.id, lead.id)).get();
+      const status = (after?.mappedData as Record<string, unknown> | null)?.allabolagMatch;
+      if (status === "matched") summary.nowMatched++;
+      else summary.stillNeedsReview++;
+    }
+    leadEmitter.emit("lead:status-changed", {
+      leadId: lead.id,
+      campaignId,
+      status: outcome === "dropped" ? "archived" : "new",
+    });
+  }
+  return summary;
 }

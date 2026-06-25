@@ -1,5 +1,5 @@
 import { getDb, getAgencyType } from "../db";
-import { leads, leadPersonalization, campaigns, apifyRuns, type KpiDefinition, type LeadFieldDefinition, type AllabolagConfig } from "../db/schema";
+import { leads, leadPersonalization, campaigns, apifyRuns, type KpiDefinition, type LeadFieldDefinition } from "../db/schema";
 import { eq, and } from "drizzle-orm";
 import { coerceActorInput } from "../apify/coerce-input";
 import { runActorAndCollect, isCampaignStopped, clearCampaignStopped } from "../apify/runner";
@@ -9,7 +9,6 @@ import { extractAllFields } from "../ai/lead-extractor";
 import { resolveActorInput } from "../ai/field-resolver";
 import type { AIProvider } from "../ai/provider";
 import { leadEmitter } from "../events/emitter";
-import { applyAllabolag } from "../allabolag/pass";
 
 const globalForCancel = globalThis as unknown as { cancelledEnrichments?: Set<number> };
 const cancelledEnrichments = globalForCancel.cancelledEnrichments ??= new Set<number>();
@@ -43,20 +42,6 @@ export async function enrichLead(
   });
 
   try {
-    // allabolag.se enrichment + employee/revenue filter (non-Apify). Runs
-    // before the Apify actors so dropped leads don't incur enrichment cost.
-    const campaignRow = lead.campaignId != null
-      ? db.select().from(campaigns).where(eq(campaigns.id, lead.campaignId)).get()
-      : undefined;
-    const allabolagCfg = (campaignRow?.allabolagConfig as AllabolagConfig | null) ?? null;
-    if (allabolagCfg?.enabled && lead.displayName) {
-      const outcome = await applyAllabolag(leadId, lead, allabolagCfg);
-      if (outcome === "dropped") {
-        // Lead archived; skip the rest of enrichment and scoring.
-        return false;
-      }
-    }
-
     const enrichmentActors: string[] = [];
     let mergedEnrichment: Record<string, unknown> = {};
     const perActorEnrichment: Record<string, Record<string, unknown>> = {};

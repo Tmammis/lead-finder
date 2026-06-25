@@ -1,6 +1,7 @@
 import { getDb } from "../db";
-import { leads, campaigns, analyticsEvents, apifyRuns, type BokadirektSource } from "../db/schema";
-import { eq } from "drizzle-orm";
+import { leads, campaigns, analyticsEvents, apifyRuns, type BokadirektSource, type AllabolagConfig } from "../db/schema";
+import { eq, and } from "drizzle-orm";
+import { runCampaignAllabolag } from "../allabolag/pass";
 import { coerceActorInput } from "./coerce-input";
 import { runActorAndCollect, ApifyError, isCampaignStopped, clearCampaignStopped } from "./runner";
 import { normalizeSingleItem } from "./normalizer";
@@ -310,6 +311,19 @@ export async function runCampaignDiscovery(campaignId: number): Promise<Discover
     .run();
 
   const totalInserted = results.reduce((s, r) => s + r.inserted, 0);
+  const newLeadIds = db.select({ id: leads.id }).from(leads)
+    .where(and(eq(leads.campaignId, campaignId), eq(leads.status, "new")))
+    .all().map((r) => r.id);
+
+  const allabolagCfg = (campaign.allabolagConfig as AllabolagConfig | null) ?? null;
+  const allabolagAuto = !!allabolagCfg?.enabled && (allabolagCfg.autoEnrich ?? true);
+  if (allabolagAuto && totalInserted > 0 && !isCampaignStopped(campaignId)) {
+    try {
+      await runCampaignAllabolag(campaignId, newLeadIds);
+    } catch (err) {
+      console.error(`Auto allabolag failed for campaign ${campaignId}:`, err);
+    }
+  }
 
   if (campaign.autoEnrich && totalInserted > 0 && !isCampaignStopped(campaignId)) {
     try {
@@ -321,10 +335,7 @@ export async function runCampaignDiscovery(campaignId: number): Promise<Discover
       db.insert(analyticsEvents).values({
         eventType: "auto_enrichment_completed",
         campaignId,
-        metadata: {
-          enriched: enrichResult.enriched,
-          failed: enrichResult.failed,
-        },
+        metadata: { enriched: enrichResult.enriched, failed: enrichResult.failed },
       }).run();
     } catch (err) {
       console.error(`Auto-enrichment failed for campaign ${campaignId}:`, err);
