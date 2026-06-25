@@ -12,6 +12,7 @@ export const ALLABOLAG_DEFAULTS: AllabolagConfig = {
   employeesMax: 50,
   revenueMinSek: 5_000_000,
   revenueMaxSek: 50_000_000,
+  autoEnrich: true,
 };
 
 // Revenue is stored in SEK but shown to the user in MSEK (millions).
@@ -99,6 +100,20 @@ export function AllabolagSettings({
             Current filter: {cfg.employeesMin}–{cfg.employeesMax} employees and{" "}
             {toM(cfg.revenueMinSek)}–{toM(cfg.revenueMaxSek)} MSEK revenue.
           </p>
+          <div className="flex items-center justify-between rounded-md border p-3">
+            <div className="pr-4">
+              <Label className="text-sm">Run automatically after discovery</Label>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                When on, allabolag runs on new leads as soon as discovery finishes.
+                This is separate from the campaign&apos;s auto-enrich (which controls
+                the paid Apify enrichers).
+              </p>
+            </div>
+            <Switch
+              checked={cfg.autoEnrich ?? true}
+              onCheckedChange={(on) => setField({ autoEnrich: on })}
+            />
+          </div>
         </CardContent>
       )}
     </Card>
