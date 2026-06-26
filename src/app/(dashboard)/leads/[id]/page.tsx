@@ -12,12 +12,15 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { ArrowLeft, Globe, Phone, Mail, ExternalLink, ChevronsRight, Save, BarChart3, RotateCw, Loader2, Copy, Maximize2, Tag, Hash, Link2, Zap, DollarSign, Pencil, Check, X, ChevronDown } from "lucide-react";
+import { ArrowLeft, Globe, Phone, Mail, ExternalLink, ChevronsRight, Save, BarChart3, RotateCw, Loader2, Copy, Maximize2, Tag, Hash, Link2, Zap, DollarSign, Pencil, Check, X, ChevronDown, Trash2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
+  DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import { ScoreBadge } from "@/components/score-badge";
 import { useActors } from "@/hooks/use-actors";
@@ -117,6 +120,25 @@ export default function LeadDetailPage() {
   const [isEditingContact, setIsEditingContact] = useState(false);
   const [editContactValues, setEditContactValues] = useState<Record<string, string>>({});
   const [savingContact, setSavingContact] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+
+  // Local-only hard delete of this lead (no Apify/external call). On success we
+  // navigate back to the lead's campaign (or the leads list); the SSE
+  // lead:deleted event drops it from any other open tab.
+  const handleDeleteLead = async () => {
+    if (!lead) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/leads/${params.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Delete failed");
+      toast.success("Lead deleted");
+      router.push(lead.campaignId ? `/campaigns/${lead.campaignId}` : "/leads");
+    } catch (err) {
+      setDeleting(false);
+      toast.error(String(err));
+    }
+  };
   const [notesDraft, setNotesDraft] = useState<string | null>(null);
 
   const loadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -326,6 +348,30 @@ export default function LeadDetailPage() {
           <h1 className="text-3xl font-bold">{lead.displayName || "Unknown"}</h1>
         </div>
         <ScoreBadge score={lead.score} size="lg" />
+        <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+          <DialogTrigger asChild>
+            <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive" title="Delete lead">
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Delete lead</DialogTitle>
+              <DialogDescription>
+                This will permanently delete <strong>{lead.displayName || "this lead"}</strong> from the local database. This cannot be undone (the lead can be re-discovered on the next run).
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDeleteOpen(false)} disabled={deleting}>
+                Cancel
+              </Button>
+              <Button variant="destructive" onClick={handleDeleteLead} disabled={deleting}>
+                {deleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Delete
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
